@@ -1,0 +1,942 @@
+---
+title: "Forecasting Consumer price index"
+author: "Bimal"
+date: "5/21/2023"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Problem Statment
+
+I want to predict the US Consumer Price Index (CPI) from Jan 2021 to July 2021.
+
+The CPI is a measure of the prices of a basket of goods and services that are typically purchased by consumers.This basket covers various categories such as food, housing, transportation, healthcare, education, recreation, and more. The items in the basket and their relative weights are periodically updated to reflect changes in consumer spending patterns.
+
+Predicting the Consumer Price Index is crucial for understanding and managing inflation, informing economic policies, facilitating wage adjustments, making investment decisions, and ensuring the stability and well-being of the economy and its participants.
+
+For example, the CPI is a widely used measure of inflation, which is the rate at which prices for goods and services are increasing over time. Predicting the CPI allows economists, policymakers, and businesses to monitor and anticipate changes in the overall level of prices in the economy. It provides valuable insights into the inflationary pressures and helps in formulating appropriate monetary and fiscal policy. Accurate CPI predictions enable governments, central banks, and policymakers to make informed decisions regarding economic planning and policy adjustments. By understanding the future direction of prices, policymakers can take measures to manage inflation, stabilize the economy, and ensure sustainable economic growth. Currently, CPI is one of the key indicators that the federal reserve use to determine the interest rate.
+
+However, predicting CPI can be extremely challenging due to several factors. The CPI is a complex index. The basket of goods and services is constantly changing, as new products are introduced and old products are discontinued. This makes it difficult to accurately predict the CPI, as the composition of the basket is constantly changing.The CPI is also affected by a number of factors, including economic growth, interest rates, and government policies. These factors can change rapidly, making it difficult to predict how they will affect the CPI.
+
+Despite these challenges, we are going to attempt to predict CPI using time series analysis.
+
+
+## Data Processing 
+
+The data was pulled from [kaggle.](https://www.kaggle.com/datasets/varpit94/us-inflation-data-updated-till-may-2021)
+
+The data contains the monthly US CPI from 1913 to July 2021.
+
+
+```{r}
+cpi <- read.csv("C:/Users/NM266850/Desktop/Training/Python/New folder/Spring Term 2023 Time Series and Forecasting/Project/USCPI.csv")
+
+head(cpi)
+
+
+
+```
+
+Convert Yearmon into date format and check for missing values.
+
+```{r}
+
+
+#Sys.setlocale("LC_TIME", "es_ES.UTF-8")  
+
+cpi$Yearmon<- as.Date(cpi$Yearmon, format = "%d-%m-%Y")
+
+
+# Check for NAs after conversion
+if (any(is.na(cpi$Yearmon))) {
+  print("Warning: NAs found after date conversion.")
+} else {
+  print("No Missing Values")
+}
+
+
+
+
+
+```
+**Splitting the data into train and test where test set is 7 months of 2021.**
+
+```{r}
+
+# Split the data into train and test sets
+train <- cpi[cpi$Yearmon < "2021-01-01", ]
+test <- cpi[cpi$Yearmon >= "2021-01-01", ]
+
+#converting df to ts
+traints <- ts(cpi$CPI, start = 1913)
+testts <- ts(cpi$CPI,  start = 2021)
+
+#traints <- ts(train$USD, frequency = 12, start = 1979)
+#testts <- ts(train$USD, frequency = 12, start = 2021)
+
+
+```
+
+
+# EDA  + Data properties
+
+**Plots of the timeseries**
+
+Looking at rolling mean and SD of the data, you can clearly see that there is an upward trend especially starting from 1970.
+
+
+```{r}
+#install.packages("xts")
+library(xts)
+
+trainxts <- xts(train$CPI, order.by = train$Yearmon)
+rollmean <- rollmean(trainxts, k = 30)
+rollsd <- rollapply(trainxts, width = 30, FUN = sd, fill = NA)
+
+# Create a plot
+plot(trainxts, main = "Rolling Mean and Standard Deviation", xlab = "Date", ylab = "CPI")
+lines(rollmean, col = "blue", lwd = 2)
+lines(rollmean + 2 * rollsd, col = "red", lty = 2, lwd = 1.5)
+lines(rollmean - 2 * rollsd, col = "red", lty = 2, lwd = 1.5)
+
+
+
+```
+**Checking for seasonality**
+
+Checking for seasonality, there doesn't seem to be a seasonal component.
+
+```{r}
+
+library(ggplot2) 
+
+#converting df to ts with frequency of 12
+traints1 <- ts(train$CPI, frequency = 12, start = 1913)
+
+library(forecast)
+
+ggseasonplot(traints1, main = "Seasonal Plot: CPI")
+
+
+
+```
+
+
+
+**Checking for stationary**
+
+Stationarity is a statistical property of a time series that means that the mean, variance, and autocorrelation of the series do not change over time. If a time series is not stationary, it may be difficult to forecast future values accurately.
+
+We already saw from the EDA above that the time series is not stationary due the trend component. Let's check for autocorrelation as well.
+
+
+**Autocorrelation Check using ACF and PACF plots**
+
+ACF plot shows that the timeseries is autocorrelated;hence, non-stationary. If the ACF plot shows a significant correlation coefficient at multiple lags, it suggests that the time series has a strong autocorrelation and may be non-stationary.An autocorrelation function (ACF) plot is a graph that displays the correlation between a time series and its lagged values.
+
+
+```{r}
+
+acf_data <- acf(traints)
+pacf_data <- pacf(traints)
+
+```
+
+**Quantitative stationary check using ADF and KPSS Tests**
+
+The ADF test tests for the presence of a unit root in the time series. A unit root is a value that causes the time series to trend upwards or downwards over time. he ADF test is based on the following null and alternative hypotheses:
+
+Null hypothesis: The time series is non-stationary. 
+
+Alternative hypothesis: The time series is stationary.
+
+The KPSS test is a trend stationarity test, which means that it tests for the presence of a trend in the time series. The KPSS test is based on the following null and alternative hypotheses: 
+
+Null hypothesis: The time series is stationary. 
+
+Alternative hypothesis: The time series is not stationary.
+
+For ADF, the p-value is 0.99, we fail to reject the null hypothesis of non-stationary for Adf, which means that there is insufficient evidence to support the alternative hypothesis of stationarity.
+
+For KPSS, we can reject the null hypothesis of stationarity, which means we have found evidence that supports the alternative hypothesis of non-stationarity.
+
+Therefore, we need to make the data stationary before fitting any model. 
+
+
+
+```{r}
+library(tseries)
+
+# Perform the ADF test
+  adf_result <- adf.test(traints)
+    cat(paste0(colnames(data), " ADF test p-value: ", adf_result$p.value, "\n"))
+
+# Perform the KPSS test
+  kpss_result <- kpss.test(traints)
+  cat(paste0(colnames(data), " KPSS test p-value: ", kpss_result$p.value, "\n"))
+  
+
+
+```
+**Differentiate with lag 1 to make time series stationary**
+
+For ADF, the p-value is 0.01, we reject the null hypothesis of non-stationary for Adf, which means that there is enough evidence to support the alternative hypothesis of stationarity.
+
+For KPSS, we can reject the null hypothesis of stationarity, which means we have found evidence that supports the alternative hypothesis of non-stationarity. 
+
+This implies a trend stationary time series.Trend stationary means that the time series exhibits a stable and consistent trend over time, while the mean and variance of the series remain constant or vary around a stable level.
+
+We also see seasonality, which makes sense as prices of goods and services can exhibit significant seasonality. The strong trend component in the non-differenced original data may be masking the seasonality in the original data.The seasonality may be more pronounced in the differenced data because the trend component has been removed.
+
+
+```{r}
+library(tseries)
+differenced_ts <- diff(traints,lag=1)
+
+#acf(differenced_ts)
+
+pacf(differenced_ts)
+
+#plot(differenced_ts)
+
+# Perform the ADF test
+  adf_result <- adf.test(differenced_ts)
+    cat(paste0(colnames(data), " ADF test p-value: ", adf_result$p.value, "\n"))
+
+# Perform the KPSS test
+  kpss_result<- kpss.test(differenced_ts)
+  cat(paste0(colnames(data), " KPSS test p-value: ", kpss_result$p.value, "\n"))
+```
+
+**Checking for seasonality**
+
+It seems like there is seasonality in the differenced timeseries.
+
+```{r}
+
+
+#converting df to ts with frequency of 12
+differenced_ts <- ts(differenced_ts, frequency = 12)
+
+library(forecast)
+
+ggseasonplot(differenced_ts, main = "Seasonal Plot: differenced_ts")
+
+
+
+```
+
+**Time Series Multiplicative Decomposition**
+
+During the decomposition process, the time series is separated into different components, such as trend, seasonal, and remainder. The trend component captures the long-term patterns and direction of the time series, the seasonal component represents the repetitive patterns occurring over shorter periods (e.g., daily, weekly, or yearly), and the remainder (or residual) component represents the unexplained variation or noise remaining after accounting for the trend and seasonal components.
+
+The remainder or residual component consists of the unpredictable and random fluctuations in the time series that cannot be explained by the identified trend and seasonal patterns. It represents the part of the data that is not captured by the underlying structure of the model.
+
+Having a value close to 1 for the remainder is ideal for multiplicative decomposition. Since multiplying any value by 1 does not change its value, it means that the trend and seasonality components are able to explain most of the variation(not all) in the data.It means that the random component is relatively small, which makes it less likely to affect the forecast accuracy. Models such as Holt-Winters and SARIMA are are suitable for capturing the trend and seasonality of the time series.
+
+The multiplicative decomposition model can be expressed as:
+
+y(t) = T(t) * S(t) * R(t)
+
+where:
+
+y(t) is the original time series data
+
+T(t) is the trend component
+
+S(t) is the seasonality component
+
+R(t) is the residual component
+
+
+
+
+```{r}
+
+decomposed_CPI <- decompose(traints1, type = "multiplicative")
+autoplot(decomposed_CPI)
+
+
+```
+
+
+## SARIMA Models
+
+Since the data is trend stationary and has a seasonal and trend component, SARIMA would be a great model as it can capture those components.
+
+auto.arima() automatically selects the best order for the ARIMA model based on a statistical criterion such as the Akaike information criterion (AIC) or the Bayesian information criterion (BIC).auto.arima() is particularly useful for time series with complex patterns or seasonality, as it can identify appropriate seasonal orders and determine whether to use seasonal differencing. It also automatiaclly applies differencing to the time series to make it stationary. You can find out more about how auto.arima() works here: https://otexts.com/fpp2/arima-r.html
+
+
+The evaluation method of AICc and BIC, disagree on SARIMA model selection. We will fit both models and compare the forecast.The baseline model agrees with the AICc model.
+
+```{r}
+#library(forecast) 
+
+baseline_model <- auto.arima(differenced_ts)
+
+
+baseline_model
+
+#find the best ARIMA model using AICc
+model_aicc <- auto.arima(differenced_ts, ic = "aicc", seasonal = TRUE)
+
+summary(model_aicc)
+
+# find the best ARIMA model using BIC
+model_bic <- auto.arima(differenced_ts, ic = "bic", seasonal = TRUE)
+
+summary(model_bic)
+
+
+```
+
+**AICc Model**
+
+Even though we are using differenced dataset, I am curious to check for stationary.The Box-Ljung test is used to assess whether there is significant autocorrelation in the residuals of a time series model. In this case, with a p-value of 0.9147, which is greater than the conventional significance level of 0.05. This suggests that there is no significant autocorrelation present in the residuals. The pacf and acf plot also looks like there is no autocorrelation.
+
+ADF  and KPSS test indicate stationary. 
+
+
+```{r}
+
+residuals1 <- resid(baseline_model)
+acf_resid1 <- acf(residuals1)
+pacf_resid1 <- pacf(residuals1)
+
+Box.test(baseline_model$residuals, type='Ljung-Box')
+
+# Perform the ADF test
+  adf_result1 <- adf.test(baseline_model$residuals)
+    #cat(paste0(colnames(data), " ADF test p-value: ", adf_result1$p.value, "\n"))
+adf_result1$p.value
+adf_result1
+# Perform the KPSS test
+  kpss_result1 <- kpss.test(baseline_model$residuals)
+kpss_result1
+
+
+```
+**Checking for Normality and Heteroscedasticity for AICc Model**
+
+The Shapiro-Wilk test is used to determine if a dataset significantly deviates from a normal distribution. In this case, with a p-value of less than 2.2e-16, which is extremely small, we reject the null hypothesis of normality. This indicates that the dataset being tested does not follow a normal distribution.We can also see from the qqplot, that residuals are not normal. This violates one of the assumption of the SARIMA models.
+
+From the residual vs fitted values plot, McLeod.Li.test and the time series plot, we can see that there is Heteroscedasticity, which also violates another assumption of the model.Heteroscedasticity refers to a situation in which the variability or dispersion of errors (residuals) in a regression or time series model is not constant across different levels of the independent variables or across different time periods.
+
+In conclusion, we should utilize an alternative model to ARIMA or try to fine-tune the SARIMA models more.
+
+```{r}
+
+#install.packages(fitar)
+residual.analysis <- function(model, std = TRUE){
+  library(TSA)
+  #library(FitAR)
+  if (std == TRUE){
+    res.model = rstandard(model)
+  }else{
+    res.model = residuals(model)
+  }
+  par(mfrow=c(3,2))
+  plot(res.model,type='o',ylab='Standardized residuals', main="Time series plot of standardized residuals")
+  abline(h=0)
+  hist(res.model,main="Histogram of standardized residuals")
+  qqnorm(res.model,main="QQ plot of standardized residuals")
+  qqline(res.model, col = 2)
+  acf(res.model,main="ACF of standardized residuals")
+  print(shapiro.test(res.model))
+  k=0
+}
+
+residual.analysis(model=baseline_model)
+
+ 
+plot(baseline_model$fitted, baseline_model$residuals, main = "Residuals vs Fitted Values", xlab = "Fitted Values", ylab = "Residuals")
+
+McLeod.Li.test(baseline_model)
+
+
+```
+
+
+**AICc Model Forecast and Accuracy**
+
+Even though the normality and homoscedastic assumption are violated, the forecast and accuracy of the ARIMA model is decent.
+
+
+
+```{r}
+
+forecast_baseline <- forecast::forecast(baseline_model, h = 6)
+
+# Obtain the original scale forecasts by applying inverse differencing
+forecast_values <- diffinv(forecast_baseline$mean, xi = tail(traints, 1))
+
+#Accuracy Test
+accuracy1 <- accuracy(forecast_values, test$CPI)
+print(accuracy1)
+
+
+# Create a data frame with forecasted values and actual values
+df <- data.frame(
+  Index = test$Yearmon,
+  Value = c(forecast_values, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(forecast_values))
+)
+
+# Load the required library
+library(ggplot2)
+
+# Plot the data frame
+ggplot(df, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for ARIMA Model with best AICc Score")
+
+
+```
+
+**BICc Model Autocorrelation Testing**
+
+Even though we are using differenced dataset, I am curious to check for stationary.The Box-Ljung test is used to assess whether there is significant autocorrelation in the residuals of a time series model. In this case, with a p-value of 0.753, which is greater than the conventional significance level of 0.05, we fail to reject the null hypothesis of no autocorrelation. This suggests that there is no significant autocorrelation present in the residuals. The pacf and acf plot also looks like there is no autocorrelation.
+
+ADF  and KPSS test indicate stationary. 
+
+
+```{r}
+
+residuals2 <- resid(model_bic)
+acf_resid2 <- acf(residuals2)
+pacf_resid2 <- pacf(residuals2)
+
+Box.test(model_bic$residuals, type='Ljung-Box')
+
+# Perform the ADF test
+  adf_result2 <- adf.test(model_bic$residuals)
+    #cat(paste0(colnames(data), " ADF test p-value: ", adf_result1$p.value, "\n"))
+adf_result2
+# Perform the KPSS test
+  kpss_result2 <- kpss.test(model_bic$residuals)
+kpss_result2
+
+
+```
+**Checking BICc model for Normality and Heteroscedasticity**
+
+The Shapiro-Wilk test is used to determine if a dataset significantly deviates from a normal distribution. In this case, with a p-value of less than 2.2e-16, which is extremely small, we reject the null hypothesis of normality. This indicates that the dataset being tested does not follow a normal distribution.We can also see from the qqplot, that residuals are not normal. This violates one of the assumption of the SARIMA models.
+
+From the residual vs fitted values plot, McLeod.Li.test and the time series plot, we can see that there is Heteroscedasticity, which also violates another assumption of the model.Heteroscedasticity refers to a situation in which the variability or dispersion of errors (residuals) in a regression or time series model is not constant across different levels of the independent variables or across different time periods.
+
+In conclusion, we should utilize an alternative model to SARIMA or further fine-tune the model.
+
+```{r}
+
+#install.packages(fitar)
+residual.analysis <- function(model, std = TRUE){
+  library(TSA)
+  #library(FitAR)
+  if (std == TRUE){
+    res.model = rstandard(model)
+  }else{
+    res.model = residuals(model)
+  }
+  par(mfrow=c(3,2))
+  plot(res.model,type='o',ylab='Standardized residuals', main="Time series plot of standardized residuals")
+  abline(h=0)
+  hist(res.model,main="Histogram of standardized residuals")
+  qqnorm(res.model,main="QQ plot of standardized residuals")
+  qqline(res.model, col = 2)
+  acf(res.model,main="ACF of standardized residuals")
+  print(shapiro.test(res.model))
+  k=0
+}
+
+residual.analysis(model=model_bic)
+
+ 
+plot(model_bic$fitted, model_bic$residuals, main = "Residuals vs Fitted Values", xlab = "Fitted Values", ylab = "Residuals")
+
+McLeod.Li.test(model_bic)
+
+
+```
+**BICc Model Forecast and Accuracy**
+
+Even though the normality and homoscedastic assumption are violated, the forecast and accuracy of the ARIMA model is decent.
+
+The AICc model had a slightly bettter accuracy score than the BICc model.
+
+
+
+```{r}
+
+forecast_BICc <- forecast::forecast(model_bic, h = 6)
+
+# Obtain the original scale forecasts by applying inverse differencing
+forecast_values1 <- diffinv(forecast_BICc$mean, xi = tail(traints, 1))
+
+#Accuracy Test
+accuracy2 <- accuracy(forecast_values1, test$CPI)
+print(accuracy2)
+
+
+# Create a data frame with forecasted values and actual values
+df <- data.frame(
+  Index = test$Yearmon,
+  Value = c(forecast_values1, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(forecast_values1))
+)
+
+# Load the required library
+#library(ggplot2)
+
+# Plot the data frame
+ggplot(df, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for ARIMA Model with best BIC Score")
+
+
+```
+
+**ARFIMA Model**
+
+ARFIMA stands for Autoregressive Fractionally Integrated Moving Average, which is a type of time series model that extends the traditional ARIMA model to include long memory or long-range dependence in the data. ARFIMA models are also known as FARIMA models, where the “F” stands for fractional differencing.
+
+In a traditional ARIMA model, the data is assumed to be stationary, meaning that the mean and variance of the data are constant over time. Additionally, the model assumes that the data has a finite memory length, which is captured by the differencing parameter “d”. The ARFIMA model relaxes these assumptions by allowing for the inclusion of fractional differencing.
+
+Fractional differencing is a technique that allows for the estimation of the memory parameter “d” to take on fractional values, rather than being limited to integer values. Fractional differencing is achieved by applying a fractional-order differencing operator to the time series. The degree of memory in the data is represented by the value of “d”, where a value of 0 indicates no memory, and a value of 1 indicates long memory.
+
+The ARFIMA model is denoted as ARFIMA(p, d, q), where “p” is the order of the autoregressive component, “q” is the order of the moving average component, and “d” is the differencing parameter. The model can be estimated using maximum likelihood estimation, and the parameters can be used to generate forecasts for the time series.
+
+ARFIMA models are particularly useful for modeling financial and economic time series data, which often exhibit long memory or long-range dependence. They can also be used to model other types of data, such as climate data, geophysical data, and network traffic data.
+
+```{r}
+
+library(arfima)
+#find lag value/d
+#library(fracdiff)
+#d <- fracdiff(traints)
+
+
+arfima_model <- forecast::arfima(differenced_ts)
+
+summary(arfima_model)
+
+
+
+```
+
+**ARFIMA Assumptions**
+
+ADF, acf/pacf plots and Ljung-Box test suggest that the time series is stationary while KPSS suggest trend stationary. This makes sense as we are using the initially differenced time series. ARFIMA can handle trend stationary so this assumption is ok.  
+
+Residual vs Fitted values plot and the time series plot of the residuals shows that the homoscedasticity is violated.
+
+Similarly, the residuals of the ARIMA model are not normally distributed as show by the qqplot and the shapiro.test.
+
+So we should look for an alternative model.
+
+
+
+```{r}
+
+#autocorrelation issue seems to be resolved
+plot(resid(arfima_model))
+acf(resid(arfima_model))
+pacf(resid(arfima_model))
+
+
+# Perform the ADF test
+  kpss_result2 <- kpss.test(arfima_model$residuals)
+  adf_result2 <- adf.test(arfima_model$residuals)
+    #cat(paste0(colnames(data), " ADF test p-value: ", adf_result1$p.value, "\n"))
+adf_result2
+
+
+
+# Perform the KPSS test
+kpss_result2
+
+#Ljung-Box test
+Box.test(arfima_model$residuals, type='Ljung-Box')
+
+plot(arfima_model$fitted, arfima_model$residuals, main = "Residuals vs Fitted Values", xlab = "Fitted Values", ylab = "Residuals")
+
+shapiro.test(arfima_model$residuals)
+
+
+qqnorm(arfima_model$residuals,main="QQ plot of standardized residuals")
+qqline(arfima_model$residuals, col = 2)
+
+plot(arfima_model$residuals,type='o',ylab='Standardized residuals', main="Time series plot of standardized residuals")
+  abline(h=0)
+
+
+
+```
+
+
+**Forecast and Accuracy of ARFIMA Model**
+
+The ARFIMA Model has a better accuracy than the two ARIMA models when comparing the RMSE and MAE. However, similar to the ARIMA model, it violates the normality and homoscedastic assumption,so we will look at another model or fine-tune the model.
+
+```{r}
+
+forecast_arfima<- forecast::forecast(arfima_model, h = 6)
+
+# Obtain the original scale forecasts by applying inverse differencing
+forecast_arfimavalues <- diffinv(forecast_arfima$mean, xi = tail(traints, 1))
+
+#Accuracy Test
+accuracy2 <- accuracy(forecast_arfimavalues, test$CPI)
+print(accuracy2)
+
+
+# Create a data frame with forecasted values and actual values
+dfarfima <- data.frame(
+  Index = test$Yearmon,
+  Value = c(forecast_arfimavalues, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(forecast_arfimavalues))
+)
+
+# Plot the data frame
+ggplot(dfarfima, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for ARFIMA Model")
+  
+summary(arfima_model)
+
+```
+
+**Holt-Winters Model**
+
+Holt-Winter model is also great at forecasting for a time series with trend and seasonal component. 
+
+Checking the assumptions of the Holt-winters:
+
+ADF KPSS test suggest the residuals are stationary.
+
+Event though Holt-Winters can handle autocorrelation, the acf/pacf plots show that there is no autocorrelation.
+
+Residual vs Fitted values plot and the time series plot of the residuals shows that the homoscedasticity test is violated.
+
+Similarly, the residuals of the ARIMA model are not normally distributed as shown by the qqplot and the shapiro.test.
+
+So we should look for an alternative mode or further fine-tune the model.
+
+```{r}
+
+holtsmodel <- HoltWinters(traints1,seasonal = "multiplicative")
+
+
+holtsmodelresiduals <- residuals(holtsmodel)
+
+
+plot(holtsmodelresiduals)
+acf(holtsmodelresiduals)
+pacf(holtsmodelresiduals)
+
+ kpss.test(holtsmodelresiduals)
+ adf.test(holtsmodelresiduals)
+  
+
+plot(holtsmodel$fitted, holtsmodelresiduals, main = "Residuals vs Fitted Values", xlab = "Fitted Values", ylab = "Residuals")
+
+shapiro.test(holtsmodelresiduals)
+
+
+qqnorm(holtsmodelresiduals,main="QQ plot of standardized residuals")
+qqline(holtsmodelresiduals, col = 2)
+
+plot(holtsmodelresiduals,type='o',ylab='Standardized residuals', main="Time series plot of standardized residuals")
+  abline(h=0)
+ 
+ 
+```
+
+**Forecast and Accuracy of Holt-Winters Model**
+
+Holt-Winters has the best forecast and accuracy score so far out of all the models. 
+
+```{r}
+
+# Forecast future values
+holtsforecast <- forecast(holtsmodel, h = 7)  # Adjust "h" to the desired number of future periods to forecast
+
+# Plot the forecasts
+plot(holtsforecast, main = "Forecasts of 7 months using Holt-Winters Model")
+
+#Accuracy Test
+holtsaccuracy <- accuracy(holtsforecast, test$CPI)
+print(holtsaccuracy)
+
+# Create a data frame with forecasted values and actual values
+dfholts <- data.frame(
+  Index = test$Yearmon,
+  Value = c(holtsforecast$mean, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(holtsforecast$mean))
+)
+
+# Plot the data frame
+ggplot(dfholts, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for Holts-Winters Model")
+  
+
+
+summary(holtsmodel)
+
+```
+**ARMA and GARCH combination**
+
+Please note that when knitting to HTML, the plot function for GARCH can't be used, so refer to the PowerPoint for the plots I am commenting on below.
+
+GARCH models are specifically designed to handle heteroskedasticity. These models allow for the variance of the errors to be time-varying. This can help to improve the accuracy of the model's predictions.
+
+For the assumptions, we already know that the differenced_ts is trend stationary. 
+
+Looking at the qqplot and the shapiro.test, the residuals are not normal either;however, the qqplot so far is the closest to normality compared to the previous models.
+
+Looking at the residuals plot, the homoscedasticity assumption is violated.
+
+The accuracy scores are still not as good as the holt-winters model.
+
+
+```{r}
+
+library(fGarch)
+
+# Fit GARCH ARMA model
+garch_model <- garchFit(~ arma(1, 1) + garch(1, 1), data = differenced_ts, trace = FALSE)
+
+# Forecast next 7 data points
+forecast_garch <- predict(garch_model, n.ahead = 6)
+
+# Obtain the original scale forecasts by applying inverse differencing
+forecast_garchvalues <- diffinv(forecast_garch$meanForecast, xi = tail(traints, 1))
+
+# Print the forecasted values
+print(forecast_garchvalues)
+
+
+#Accuracy Test
+accuracy4 <- accuracy(forecast_garchvalues, test$CPI)
+print(accuracy4)
+
+
+# Create a data frame with forecasted values and actual values
+dfgarch <- data.frame(
+  Index = test$Yearmon,
+  Value = c(forecast_garchvalues, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(forecast_garchvalues))
+)
+
+# Plot the data frame
+ggplot(dfgarch, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for Garch Model")
+  
+#plot(garch_model)
+
+
+shapiro.test(garch_model@residuals)
+
+summary(garch_model)
+  
+```
+**SARIMA-GARCH Model**
+
+Please note that when knitting to HTML, the plot function for GARCH can't be used, so refer to the PowerPoint for the plots I am commenting on below.
+
+For the assumptions, we already know that the differenced_ts is trend stationary. 
+
+Looking at the qqplot and the shapiro.test, the residuals are not normal either and it is similar to the ARIMA-GARCH model.
+
+Looking at the residuals plot, the homoscedasticity assumption is violated.
+
+The accuracy scores are still not as good as the holt-winters model.
+
+```{r}
+# Assuming you have the 'differenced_ts' dataset and have installed the 'rugarch' package
+library(rugarch)
+
+# Specify the SARIMA-GARCH model
+sarima_garch_spec <- ugarchspec(
+  mean.model = list(armaOrder = c(1, 0)),
+  variance.model = list(garchOrder = c(1, 1)),
+  distribution.model = "std"
+)
+
+# Fit the SARIMA-GARCH model
+sarima_garch_model <- ugarchfit(
+  data = as.numeric(differenced_ts),
+  spec = sarima_garch_spec
+)
+
+# Forecast next 7 data points
+forecast_sarima_garch <- ugarchforecast(sarima_garch_model, n.ahead = 6)
+
+# Obtain the original scale forecasts by applying inverse differencing
+last_value <- tail(traints1, 1)
+
+# Apply inverse differencing to the forecasted differences
+forecasted_diff <- forecast_sarima_garch@forecast$seriesFor
+forecasted_values <- cumsum(c(last_value, forecasted_diff))
+
+
+#Accuracy Test
+accuracy(forecasted_values, test$CPI)
+
+
+# Create a data frame with forecasted values and actual values
+dfgarchsarima <- data.frame(
+  Index = test$Yearmon,
+  Value = c(forecasted_values, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(forecasted_values))
+)
+
+# Plot the data frame
+ggplot(dfgarchsarima, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for GarchSARIMA Model")
+  
+#plot(sarima_garch_model)
+
+#shapiro.test(residuals(sarima_garch_model))
+
+summary(sarima_garch_model)
+
+```
+
+
+**Prophet Model**
+
+Another great model to try when there is trend and seasonality is the prophet model. Unlike the other models, it doesn't have much assumptions as it is a curve fitting model.
+
+I still looked at the residuals. The ADF and KPSS test and pacf plot indicate no autocorrelation. However, 	Box-Ljung test and acf plot indicate autocorrelation.
+You can see from the qqplot and Shapiro-Wilk normality test that the residuals are not normal and the residuals vs fitted plots show heteroskedasticity.
+
+
+
+```{r}
+
+#Load the necessary libraries
+
+#install.packages("prophet")
+
+library(prophet)
+
+
+df<-train
+names(df) <- c('ds', 'y') 
+
+
+
+# Fit the Prophet model
+prophetmodel <- prophet(df,yearly.seasonality = "TRUE")
+
+summary(prophetmodel)
+
+allactual <- cpi$CPI
+
+future <- make_future_dataframe(prophetmodel, periods=7)
+
+forecastprophet<- predict(prophetmodel, future)
+# Get forecasted values
+allforecasted <- forecastprophet$yhat
+
+# Calculate residuals
+prophetresiduals <- allactual - allforecasted
+prophetresiduals
+
+plot(prophetresiduals)
+acf(prophetresiduals)
+pacf(prophetresiduals)
+
+
+# Perform the ADF/KPSS test
+  kpss.test(prophetresiduals)
+  adf.test(prophetresiduals)
+
+#Ljung-Box test
+Box.test(prophetresiduals, type='Ljung-Box')
+plot(allforecasted, prophetresiduals, main = "Residuals vs Fitted Values", xlab = "Fitted Values", ylab = "Residuals")
+
+shapiro.test(prophetresiduals)
+
+
+qqnorm(prophetresiduals,main="QQ plot of standardized residuals")
+qqline(prophetresiduals, col = 2)
+
+plot(prophetresiduals,type='o',ylab='Standardized residuals', main="Time series plot of standardized residuals")
+  abline(h=0)
+
+```
+
+**Forecast and Accuracy of Prophet Model**
+
+Holt-Winters model still has the best accuracy.
+
+```{r}
+
+
+
+prophet_plot_components(prophetmodel, forecastprophet)
+
+
+
+plot(prophetmodel,forecastprophet)
+
+forecasted <- forecastprophet$yhat[1297:1303]
+
+
+# Create a data frame with forecasted values and actual values
+dfprophet <- data.frame(
+  Index = test$Yearmon,
+  Value = c(forecasted, test$CPI),
+  Variable = rep(c("Forecast", "Actual"), each = length(forecasted))
+)
+
+# Plot the data frame
+ggplot(dfprophet, aes(x = Index, y = Value, color = Variable)) +
+  geom_line() +
+  labs(x = "Index", y = "Value", color = "Variable",title = "Forecast vs Actual for prophet Model")
+
+# Calculate accuracy metrics
+actual <- test$CPI
+
+
+
+# Mean Absolute Error (MAE)
+mae <- mean(abs(actual - forecasted))
+
+# Mean Absolute Percentage Error (MAPE)
+mape <- mean(abs((actual - forecasted) / actual)) * 100
+
+# Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((actual - forecasted)^2))
+
+# Percentage of Correct Direction (PCD)
+direction <- sign(diff(actual))
+pcd <- mean(sign(diff(forecasted)) == direction) * 100
+
+# Print the accuracy metrics
+cat("MAE:", mae, "\n")
+cat("MAPE:", mape, "%\n")
+cat("RMSE:", rmse, "\n")
+cat("PCD:", pcd, "%\n")
+
+
+
+
+
+
+
+```
+
+# Results (accuracy), learnings from the methodology and future work
+
+I created 7 models in total: 2 ARIMA models, 1 ARFIMA model, 1 Holts-Winter model, 1 ARIMA-GARCH model and 1 SARIMA-GARCH model and a Prophet model.Holts-Winter had the best accuracy score looking at the RMSE and MAE scores out of all the models and the forecast was decent enough. However, I pick the SARIMA-GARCH model as my final model because its accuracy is close to Holts-Winter and it is better at handling the heteroskedasticity issue.
+
+
+The timeseries data was differenced to meet stationary and autocorrelation assumption for ARIMA and ARFIMA models. However, all 7 models violated the normality and homoscedastic test. 
+
+Due to time constraints, I couldn't fix the normality and homoscedastic issue. In future work, I would have like to try more GARCH models, which are good at handling heteroskedasticity. I would also further fine-tune my other models. I would have also liked to bring in another variable such as interest rate and use dynamic regression and BSTS.
